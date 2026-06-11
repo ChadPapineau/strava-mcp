@@ -4,12 +4,13 @@ An MCP (Model Context Protocol) server that provides comprehensive access to the
 
 ## Features
 
-**24 tools** covering the full Strava API:
+**26 tools** covering the full Strava API:
 
 | Category | Tools |
 |----------|-------|
+| **Auth** | Diagnose connection status and token health |
 | **Athlete** | Get profile, stats (recent/YTD/all-time), heart rate & power zones |
-| **Activities** | List activities (with date filtering), get detail, laps, zones, comments, kudos |
+| **Activities** | Aggregated summaries, list activities (compact or full, with sport type filtering), get detail, laps, zones, comments, kudos |
 | **Segments** | Get segment detail, explore by area, leaderboard, starred segments, segment efforts |
 | **Streams** | Activity streams, segment effort streams, route streams (second-by-second data) |
 | **Routes** | List athlete routes, get route detail |
@@ -30,15 +31,16 @@ All tools support both **markdown** (human-readable) and **JSON** (structured) o
 
 1. Go to [strava.com/settings/api](https://www.strava.com/settings/api)
 2. Create an application (or use an existing one)
-3. Note your **Client ID** and **Client Secret**
+3. Set the **Authorization Callback Domain** to `localhost`
+4. Note your **Client ID** and **Client Secret**
 
 > **Important:** You only need the Client ID and Client Secret. The `npm run authorize` command handles getting your access and refresh tokens automatically via your browser.
 
 ### 2. Install & Build
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/strava-mcp-server.git
-cd strava-mcp-server
+git clone https://github.com/ChadPapineau/strava-mcp.git
+cd strava-mcp
 npm install
 npm run build
 ```
@@ -54,9 +56,10 @@ STRAVA_CLIENT_ID=your_client_id \
 ```
 
 This will:
-1. Open your browser to Strava's authorization page
-2. You click "Authorize" on Strava
-3. Fresh tokens are automatically saved to `~/.strava-mcp-tokens.json`
+1. Start a local callback server on port 8091
+2. Open your browser to Strava's authorization page
+3. You click "Authorize" on Strava
+4. Fresh tokens are automatically saved to `~/.strava-mcp-tokens.json`
 
 You should see a success page in your browser confirming the connection.
 
@@ -72,7 +75,7 @@ Add the server to your Claude Desktop configuration file:
   "mcpServers": {
     "strava": {
       "command": "node",
-      "args": ["/absolute/path/to/strava-mcp-server/dist/index.js"],
+      "args": ["/absolute/path/to/strava-mcp/dist/index.js"],
       "env": {
         "STRAVA_CLIENT_ID": "your_client_id",
         "STRAVA_CLIENT_SECRET": "your_client_secret"
@@ -82,7 +85,7 @@ Add the server to your Claude Desktop configuration file:
 }
 ```
 
-> **Note:** You do NOT need to put access/refresh tokens in the config. The server reads them from `~/.strava-mcp-tokens.json` (created by `npm run authorize`) and manages rotation automatically.
+> **Note:** You do NOT need to put access/refresh tokens in the config. The server reads them from `~/.strava-mcp-tokens.json` (created by `npm run authorize`) and manages token rotation automatically.
 
 ### 5. Restart Claude Desktop
 
@@ -94,9 +97,10 @@ After saving the config, restart Claude Desktop. The Strava tools will appear in
 |----------|----------|-------------|
 | `STRAVA_CLIENT_ID` | Yes | Your Strava API application client ID |
 | `STRAVA_CLIENT_SECRET` | Yes | Your Strava API application client secret |
-| `STRAVA_ACCESS_TOKEN` | Yes | OAuth2 access token |
-| `STRAVA_REFRESH_TOKEN` | Yes | OAuth2 refresh token (enables automatic token refresh) |
 | `STRAVA_TOKEN_FILE` | No | Path to persist refreshed tokens (default: `~/.strava-mcp-tokens.json`) |
+| `STRAVA_AUTH_PORT` | No | Port for the OAuth callback server (default: `8091`) |
+| `STRAVA_ACCESS_TOKEN` | No | Manual override — only needed if not using `npm run authorize` |
+| `STRAVA_REFRESH_TOKEN` | No | Manual override — only needed if not using `npm run authorize` |
 
 ## How Token Management Works
 
@@ -106,13 +110,16 @@ Strava access tokens expire every 6 hours, and **Strava rotates refresh tokens**
 2. **Before each API call**: checks if the access token is expired (or within 5 minutes of expiry) and refreshes proactively.
 3. **On 401 responses**: force-refreshes the token and retries the request once automatically.
 4. **After every successful refresh**: writes the new tokens to disk (with `0600` permissions) so they survive server restarts.
+5. **Concurrency safety**: uses a mutex to prevent multiple simultaneous refresh attempts.
 
-This means you only need to set the env var tokens **once** during initial setup. After the first successful refresh, the server manages token rotation entirely on its own.
+After running `npm run authorize` once, the server manages token rotation entirely on its own. You should never need to manually copy or paste tokens.
 
 ## Usage Examples
 
 Once connected, you can ask Claude things like:
 
+- *"How many miles have I run this month?"* (uses the efficient activity summary tool)
+- *"What's my total training volume this week?"*
 - *"Show me my Strava profile"*
 - *"What are my all-time running stats?"*
 - *"List my last 10 activities"*
@@ -127,19 +134,26 @@ Once connected, you can ask Claude things like:
 
 ## Tool Reference
 
+### Auth Tools
+
+| Tool | Description |
+|------|-------------|
+| `strava_auth_status` | Diagnose OAuth connection health — checks token file, env vars, and makes a live API test call. Use this first when troubleshooting auth errors. |
+
 ### Athlete Tools
 
 | Tool | Description |
 |------|-------------|
 | `strava_get_athlete` | Get your profile (ID, name, location, FTP, weight, etc.) |
-| `strava_get_athlete_stats` | Aggregate stats: recent, YTD, and all-time for rides/runs/swims |
+| `strava_get_athlete_stats` | Aggregate stats: recent (4 wk), YTD, and all-time for rides/runs/swims |
 | `strava_get_athlete_zones` | Heart rate and power training zones |
 
 ### Activity Tools
 
 | Tool | Description |
 |------|-------------|
-| `strava_list_activities` | List activities with optional date range filters |
+| `strava_activity_summary` | **Best for "how many miles" questions.** Aggregates totals (distance, time, elevation, pace) for a date range, grouped by sport type. Server-side computation — very fast and token-efficient. |
+| `strava_list_activities` | List activities with date range and sport type filters. Supports compact mode (one line per activity, default) or full detail. |
 | `strava_get_activity` | Full activity detail with segments, best efforts, splits |
 | `strava_get_activity_laps` | Lap-by-lap breakdown |
 | `strava_get_activity_zones` | Time spent in each HR/power zone |
@@ -178,7 +192,7 @@ Once connected, you can ask Claude things like:
 
 ## OAuth Scopes
 
-For full functionality, your Strava API token should have these scopes:
+The `npm run authorize` command requests these scopes automatically:
 
 - `read` — Read public data
 - `read_all` — Read private activities
@@ -193,7 +207,7 @@ Strava enforces API rate limits:
 - **1,000 requests per day** (default app)
 - Approved apps get higher limits (600/15min, 6,000/day)
 
-The server returns clear error messages when rate limits are hit.
+The server returns clear error messages when rate limits are hit. The `strava_activity_summary` tool is designed to minimize API calls by fetching in large pages and aggregating server-side.
 
 ## Development
 
@@ -206,20 +220,26 @@ npm run build
 
 # Run the built server
 npm start
+
+# Clean build artifacts
+npm run clean
 ```
 
 ## Troubleshooting
 
 **"Missing required environment variables"**
-Ensure all four `STRAVA_*` environment variables are set in your Claude Desktop config.
+Ensure `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET` are set in your Claude Desktop config (see step 4 above).
 
-**"Unauthorized" errors / "Token refresh failed: refresh token is invalid or revoked"**
-The refresh token has been invalidated. Just re-run the authorize flow:
+**"Unauthorized" errors / "Token refresh failed"**
+Your refresh token has been invalidated. Re-run the authorize flow:
 ```bash
-cd /path/to/strava-mcp-server
+cd /path/to/strava-mcp
 STRAVA_CLIENT_ID=your_id STRAVA_CLIENT_SECRET=your_secret npm run authorize
 ```
-Then restart Claude Desktop. That's it — no manual token copying needed.
+Then restart Claude Desktop. No manual token copying needed.
+
+**Use `strava_auth_status` for diagnostics**
+If you're seeing auth errors in Claude, ask Claude to run the `strava_auth_status` tool. It checks the token file, environment variables, and makes a live API call, then reports exactly what's wrong and how to fix it.
 
 **"Rate limit exceeded"**
 Wait 15 minutes before making more requests, or reduce the frequency of tool calls.
@@ -229,6 +249,9 @@ Double-check the ID you're passing. Use `strava_list_activities` or `strava_get_
 
 **Token file location**
 By default tokens are persisted to `~/.strava-mcp-tokens.json`. To change this, set the `STRAVA_TOKEN_FILE` environment variable. To see what the server is doing with tokens, check stderr output (visible in Claude Desktop logs).
+
+**Callback port conflict**
+If port 8091 is in use, set `STRAVA_AUTH_PORT` to a different port before running `npm run authorize`.
 
 ## License
 
