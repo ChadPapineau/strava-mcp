@@ -1,7 +1,7 @@
 {
-  "name": "strava-connector",
+  "name": "strava-mcp",
   "version": "1.0.0",
-  "description": "Strava MCP connector for Claude — OAuth + HTTP MCP server",
+  "description": "A local MCP server that connects Claude to your Strava account — query your activities, stats, segments, and more using natural language.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
